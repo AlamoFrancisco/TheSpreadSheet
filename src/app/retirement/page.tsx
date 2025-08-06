@@ -13,6 +13,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import Navbar from "@/components/Navbar"; // ✅ Add this line
 
 // Helper: calculate age from dob string yyyy-mm-dd
 function calculateAge(dobStr: string) {
@@ -55,7 +56,6 @@ export default function RetirementPlanner() {
   const [inflationRate, setInflationRate] = useState(2.5);
   const [retirementMonthlySalary, setRetirementMonthlySalary] = useState(2000);
 
-  // On mount, try to get DOB from localStorage and update currentAge
   useEffect(() => {
     const savedProfile = localStorage.getItem("userProfile");
     if (savedProfile) {
@@ -67,9 +67,7 @@ export default function RetirementPlanner() {
             setCurrentAge(age);
           }
         }
-      } catch {
-        // ignore errors
-      }
+      } catch {}
     }
   }, []);
 
@@ -94,97 +92,67 @@ export default function RetirementPlanner() {
   );
 
   return (
-    <div className="min-h-screen flex flex-col items-center p-6 gap-6">
-      <Card className="w-full max-w-2xl">
-        <CardHeader>
-          <CardTitle className="text-xl">Retirement Planner</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Input
-            type="number"
-            placeholder="Current Age"
-            value={currentAge}
-            onChange={(e) => setCurrentAge(Number(e.target.value))}
-          />
-          <Input
-            type="number"
-            placeholder="Retirement Age"
-            value={retirementAge}
-            onChange={(e) => setRetirementAge(Number(e.target.value))}
-          />
-          <Input
-            type="number"
-            placeholder="Current Pot (£)"
-            value={currentPot}
-            onChange={(e) => setCurrentPot(Number(e.target.value))}
-          />
-          <Input
-            type="number"
-            placeholder="Monthly Contribution (£)"
-            value={monthlyContribution}
-            onChange={(e) => setMonthlyContribution(Number(e.target.value))}
-          />
-          <Input
-            type="number"
-            placeholder="Expected Annual Return (%)"
-            value={expectedReturn}
-            onChange={(e) => setExpectedReturn(Number(e.target.value))}
-          />
-          <Input
-            type="number"
-            placeholder="Inflation Rate (%)"
-            value={inflationRate}
-            onChange={(e) => setInflationRate(Number(e.target.value))}
-          />
-          <Input
-            type="number"
-            placeholder="Retirement Monthly Salary Needed (£)"
-            value={retirementMonthlySalary}
-            onChange={(e) => setRetirementMonthlySalary(Number(e.target.value))}
-          />
-          <Input
-            type="number"
-            placeholder="Retirement Goal (£)"
-            value={goal}
-            onChange={(e) => setGoal(Number(e.target.value))}
-          />
+    <>
+      <Navbar /> {/* ✅ Inject top navigation */}
 
-          <div className="bg-gray-100 p-4 rounded text-sm space-y-2">
-            <div>Years to grow: {yearsToGrow} years</div>
-            <div>Monthly Contribution: £{monthlyContribution}</div>
-            <div>Expected Annual Return: {expectedReturn}%</div>
-            <div>Inflation Rate: {inflationRate}%</div>
-            <div>Inflation-adjusted Retirement Goal: £{inflationAdjustedGoal.toFixed(2)}</div>
-            <div>Target Monthly Income (adjusted): £{adjustedMonthlySalary.toFixed(2)}</div>
-            <div>Projected Retirement Pot: £{futureValue.toFixed(2)}</div>
-            <div className="text-green-700 font-semibold">
-              You are at {progressPct.toFixed(0)}% of your retirement target
+      <div className="min-h-screen flex flex-col items-center p-6 gap-6">
+        <Card className="w-full max-w-2xl">
+          <CardHeader>
+            <CardTitle className="text-xl">Retirement Planner</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Input type="number" placeholder="Current Age" value={currentAge} onChange={(e) => setCurrentAge(Number(e.target.value))} />
+            <Input type="number" placeholder="Retirement Age" value={retirementAge} onChange={(e) => setRetirementAge(Number(e.target.value))} />
+            <Input type="number" placeholder="Current Pot (£)" value={currentPot} onChange={(e) => setCurrentPot(Number(e.target.value))} />
+            <Input type="number" placeholder="Monthly Contribution (£)" value={monthlyContribution} onChange={(e) => setMonthlyContribution(Number(e.target.value))} />
+            <Input type="number" placeholder="Expected Annual Return (%)" value={expectedReturn} onChange={(e) => setExpectedReturn(Number(e.target.value))} />
+            <Input type="number" placeholder="Inflation Rate (%)" value={inflationRate} onChange={(e) => setInflationRate(Number(e.target.value))} />
+            <Input type="number" placeholder="Retirement Monthly Salary Needed (£)" value={retirementMonthlySalary} onChange={(e) => setRetirementMonthlySalary(Number(e.target.value))} />
+            <Input type="number" placeholder="Retirement Goal (£)" value={goal} onChange={(e) => setGoal(Number(e.target.value))} />
+
+            <div className="bg-gray-100 p-4 rounded text-sm space-y-2">
+              <div>Years to grow: {yearsToGrow} years</div>
+              <div>Monthly Contribution: £{monthlyContribution.toLocaleString()}</div>
+              <div>Expected Annual Return: {expectedReturn}%</div>
+              <div>Inflation Rate: {inflationRate}%</div>
+              <div>Inflation-adjusted Retirement Goal: £{inflationAdjustedGoal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+              <div>Target Monthly Income (adjusted): £{adjustedMonthlySalary.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+              <div>Projected Retirement Pot: £{futureValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+              <div className="text-green-700 font-semibold">
+                You are at {progressPct.toFixed(0)}% of your retirement target
+              </div>
+              <Progress value={progressPct} />
             </div>
-            <Progress value={progressPct} />
-          </div>
 
-          <div className="mt-6">
-            <h3 className="text-lg font-semibold mb-2">Projection Graph</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart
-                data={projectionData}
-                margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip formatter={(value) => `£${value}`} />
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#4f46e5"
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold mb-2">Projection Graph</h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart
+                  data={projectionData}
+                  margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis
+                    tickFormatter={(value) => `£${value.toLocaleString()}`}
+                    width={100}
+                  />
+                  <Tooltip
+                    formatter={(value: number) => `£${value.toLocaleString()}`}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="value"
+                    stroke="#4f46e5"
+                    strokeWidth={2}
+                    dot={{ r: 2 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </>
   );
 }

@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { motion } from "framer-motion";
+import Navbar from "@/components/Navbar"; // ✅ Add top nav
 
 const getTaxBand = (salaryAfterPension: number) => {
   if (salaryAfterPension > 125140) return { label: "Very High Earner", color: "bg-red-600" };
@@ -14,8 +15,8 @@ const getTaxBand = (salaryAfterPension: number) => {
 
 export default function NetSalaryCalculator() {
   const [grossSalary, setGrossSalary] = useState(30000);
-  const [pensionContribution, setPensionContribution] = useState(8); // Default 8%
-  const [workHoursFactor, setWorkHoursFactor] = useState(1); // Full time default
+  const [pensionContribution, setPensionContribution] = useState(8);
+  const [workHoursFactor, setWorkHoursFactor] = useState(1);
 
   useEffect(() => {
     const savedProfile = localStorage.getItem("userProfile");
@@ -62,98 +63,101 @@ export default function NetSalaryCalculator() {
     const net = salaryAfterPension - incomeTax - ni;
 
     return {
-      pension: pension.toFixed(2),
-      incomeTax: incomeTax.toFixed(2),
-      nationalInsurance: ni.toFixed(2),
-      netAnnual: net.toFixed(2),
-      netMonthly: (net / 12).toFixed(2),
+      pension,
+      incomeTax,
+      nationalInsurance: ni,
+      netAnnual: net,
+      netMonthly: net / 12,
       bandInfo: getTaxBand(salaryAfterPension),
     };
   };
 
-  // Adjust salary by workHoursFactor (e.g. 0.8 for 80% time)
   const adjustedSalary = grossSalary * workHoursFactor;
-
   const result = calculateNetSalary(Number(adjustedSalary), Number(pensionContribution));
 
-  // Save net monthly salary to localStorage for use in other apps
   useEffect(() => {
-    localStorage.setItem("netMonthlySalary", result.netMonthly);
+    localStorage.setItem("netMonthlySalary", result.netMonthly.toString());
   }, [result.netMonthly]);
 
   return (
-    <div className="min-h-screen p-6 flex flex-col items-center">
-      <motion.div
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="w-full max-w-xl"
-      >
-        <Card className="shadow-lg rounded-2xl">
-          <CardHeader className="flex flex-col items-start gap-2">
-            <div className={`px-3 py-1 rounded-full text-white text-xs font-semibold ${result.bandInfo.color}`}>
-              {result.bandInfo.label}
-            </div>
-            <CardTitle className="text-xl">UK Net Salary Estimator</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="salary">Gross Annual Salary (£)</Label>
-                <Input
-                  type="number"
-                  id="salary"
-                  value={grossSalary}
-                  onChange={(e) => setGrossSalary(Number(e.target.value))}
-                />
-              </div>
-              <div>
-                <Label htmlFor="pension">Pension Contribution (%)</Label>
-                <Input
-                  type="number"
-                  id="pension"
-                  value={pensionContribution}
-                  onChange={(e) => setPensionContribution(Number(e.target.value))}
-                />
-              </div>
-              <div>
-                <Label htmlFor="workHours">Work Hours Factor (0 to 1)</Label>
-                <Input
-                  type="number"
-                  id="workHours"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={workHoursFactor}
-                  onChange={(e) => {
-                    let val = Number(e.target.value);
-                    if (val < 0) val = 0;
-                    if (val > 1) val = 1;
-                    setWorkHoursFactor(val);
-                  }}
-                />
-              </div>
-            </div>
+    <>
+      <Navbar />
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <div className="bg-gray-50 p-4 rounded-xl shadow">
-                <h3 className="font-semibold mb-2">Annual Summary</h3>
-                <p><strong>Pension Contribution:</strong> £{result.pension}</p>
-                <p><strong>Income Tax:</strong> £{result.incomeTax}</p>
-                <p><strong>National Insurance:</strong> £{result.nationalInsurance}</p>
-                <p><strong>Net Annual Salary:</strong> £{result.netAnnual}</p>
+      <div className="min-h-screen p-6 flex flex-col items-center">
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="w-full max-w-xl"
+        >
+          <Card className="shadow-lg rounded-2xl">
+            <CardHeader className="flex flex-col items-start gap-2">
+              <div
+                className={`px-3 py-1 rounded-full text-white text-xs font-semibold ${result.bandInfo.color}`}
+              >
+                {result.bandInfo.label}
               </div>
-              <div className="bg-gray-50 p-4 rounded-xl shadow">
-                <h3 className="font-semibold mb-2">Monthly Summary</h3>
-                <p><strong>Pension Contribution:</strong> £{(Number(result.pension) / 12).toFixed(2)}</p>
-                <p><strong>Income Tax:</strong> £{(Number(result.incomeTax) / 12).toFixed(2)}</p>
-                <p><strong>National Insurance:</strong> £{(Number(result.nationalInsurance) / 12).toFixed(2)}</p>
-                <p><strong>Net Monthly Salary:</strong> £{result.netMonthly}</p>
+              <CardTitle className="text-xl">UK Net Salary Estimator</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="salary">Gross Annual Salary (£)</Label>
+                  <Input
+                    type="number"
+                    id="salary"
+                    value={grossSalary}
+                    onChange={(e) => setGrossSalary(Number(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="pension">Pension Contribution (%)</Label>
+                  <Input
+                    type="number"
+                    id="pension"
+                    value={pensionContribution}
+                    onChange={(e) => setPensionContribution(Number(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="workHours">Work Hours Factor (0 to 1)</Label>
+                  <Input
+                    type="number"
+                    id="workHours"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={workHoursFactor}
+                    onChange={(e) => {
+                      let val = Number(e.target.value);
+                      if (val < 0) val = 0;
+                      if (val > 1) val = 1;
+                      setWorkHoursFactor(val);
+                    }}
+                  />
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-    </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div className="bg-gray-50 p-4 rounded-xl shadow">
+                  <h3 className="font-semibold mb-2">Annual Summary</h3>
+                  <p><strong>Pension Contribution:</strong> £{result.pension.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p><strong>Income Tax:</strong> £{result.incomeTax.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p><strong>National Insurance:</strong> £{result.nationalInsurance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p><strong>Net Annual Salary:</strong> £{result.netAnnual.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="bg-gray-50 p-4 rounded-xl shadow">
+                  <h3 className="font-semibold mb-2">Monthly Summary</h3>
+                  <p><strong>Pension Contribution:</strong> £{(result.pension / 12).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p><strong>Income Tax:</strong> £{(result.incomeTax / 12).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p><strong>National Insurance:</strong> £{(result.nationalInsurance / 12).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p><strong>Net Monthly Salary:</strong> £{result.netMonthly.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+    </>
   );
 }
