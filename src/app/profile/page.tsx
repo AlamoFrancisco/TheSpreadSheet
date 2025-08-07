@@ -39,42 +39,48 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
+
     const loadProfile = async () => {
       const {
         data: { session },
         error,
       } = await supabase.auth.getSession();
 
+      if (!active) return;
+
       if (error || !session?.user) {
-        // Wait a bit and try again once if no session yet
-        setTimeout(loadProfile, 300);
+        setLoading(false);
+        router.replace('/login');
         return;
       }
 
-      const user = session.user;
-      setUserId(user.id);
+      const uid = session.user.id;
+      setUserId(uid);
 
       const { data, error: profileError } = await supabase
         .from('profiles')
-        .select('*')
-        .eq('id', user.id)
+        .select('first_name,last_name,email,gender,dob,salary,photo_url')
+        .eq('id', uid)
         .single();
 
+      // If RLS blocks or request fails, surface it
       if (profileError && profileError.code !== 'PGRST116') {
         console.error('Fetch profile error:', profileError);
+        setLoading(false);
         return;
       }
 
       if (data) {
         setProfile({
-          first_name: data.first_name || '',
-          last_name: data.last_name || '',
-          email: data.email || '',
-          gender: data.gender || '',
-          dob: data.dob || '',
-          salary: data.salary?.toString() || '',
+          first_name: data.first_name ?? '',
+          last_name: data.last_name ?? '',
+          email: data.email ?? '',
+          gender: data.gender ?? '',
+          dob: data.dob ?? '',
+          salary: (data.salary ?? '').toString(),
           photo: null,
-          photo_url: data.photo_url || '',
+          photo_url: data.photo_url ?? '',
         });
         setEditable(false);
       } else {
@@ -85,6 +91,9 @@ export default function ProfilePage() {
     };
 
     loadProfile();
+    return () => {
+      active = false;
+    };
   }, [router]);
 
   const handleChange = (
@@ -112,11 +121,8 @@ export default function ProfilePage() {
       return undefined;
     }
 
-    const { data: publicUrl } = supabase.storage
-      .from('avatars')
-      .getPublicUrl(fileName);
-
-    return publicUrl?.publicUrl;
+    const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
+    return data?.publicUrl;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -125,26 +131,24 @@ export default function ProfilePage() {
 
     const photoUrl = await uploadPhoto();
 
-    const { error } = await supabase
-      .from('profiles')
-      .upsert({
-        id: userId,
-        first_name: profile.first_name,
-        last_name: profile.last_name,
-        email: profile.email,
-        gender: profile.gender,
-        dob: profile.dob,
-        salary: Number(profile.salary),
-        photo_url: photoUrl || null,
-        last_login: new Date().toISOString(),
-      });
+    const { error } = await supabase.from('profiles').upsert({
+      id: userId,
+      first_name: profile.first_name,
+      last_name: profile.last_name,
+      email: profile.email,
+      gender: profile.gender,
+      dob: profile.dob,
+      salary: Number(profile.salary),
+      photo_url: photoUrl || null,
+      last_login: new Date().toISOString(),
+    });
 
     if (error) {
       console.error('Save error:', error);
       alert('Failed to save profile');
     } else {
       alert('Profile saved!');
-      router.push('/page');
+      router.push('/');
     }
   };
 

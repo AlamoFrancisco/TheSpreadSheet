@@ -1,155 +1,325 @@
-"use client";
+'use client';
 
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  TabsContent,
-} from "@/components/ui/tabs";
-import {
-  Dialog,
-  DialogTrigger,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import { Progress } from "@/components/ui/progress";
-import Navbar from "@/components/Navbar"; // ✅ Add top navigation
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 
-type TabKey = "essentials" | "priorities" | "lifestyle";
+import Navbar from '@/components/Navbar';
+import { motion } from 'framer-motion';
 
-interface Category {
-  id: number;
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+
+type TabKey = 'essentials' | 'priorities' | 'lifestyle';
+
+type Category = {
+  id: string;
+  user_id: string;
   name: string;
-  value: number;
   type: TabKey;
-}
+  monthly_budget: number;
+  created_at: string;
+  updated_at: string | null;
+};
 
-const initialCategories: Category[] = [
-  { id: 1, name: "Rent", value: 700, type: "essentials" },
-  { id: 2, name: "Groceries", value: 275, type: "essentials" },
-  { id: 3, name: "Transport", value: 60, type: "essentials" },
-  { id: 4, name: "Savings", value: 50, type: "priorities" },
-  { id: 5, name: "Debt Repayment", value: 200, type: "priorities" },
-  { id: 6, name: "Entertainment", value: 125, type: "lifestyle" },
-  { id: 7, name: "Dining Out", value: 80, type: "lifestyle" },
-];
+type Tx = {
+  id: string;
+  user_id: string;
+  category_id: string;
+  amount: number;
+  occurred_on: string; // date
+  note: string | null;
+  created_at: string;
+};
 
 const TAB_LABELS: Record<TabKey, string> = {
-  essentials: "Essentials",
-  priorities: "Priorities",
-  lifestyle: "Lifestyle",
+  essentials: 'Essentials',
+  priorities: 'Priorities',
+  lifestyle: 'Lifestyle',
 };
 
-const allocationPct = (tab: TabKey) => {
-  switch (tab) {
-    case "essentials":
-      return 0.5;
-    case "priorities":
-      return 0.2;
-    case "lifestyle":
-      return 0.3;
-    default:
-      return 0;
-  }
-};
+const allocationPct = (tab: TabKey) => (tab === 'essentials' ? 0.5 : tab === 'priorities' ? 0.2 : 0.3);
+
+const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
 
 export default function BudgetApp() {
-  const [categories, setCategories] = useState<Category[]>(initialCategories);
-  const [manualSalary, setManualSalary] = useState<number>(0);
+  const router = useRouter();
+
+  // Auth & loading
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Data
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [txByCat, setTxByCat] = useState<Record<string, Tx[]>>({});
+
+  // Salary
   const [salary, setSalary] = useState<number>(0);
-  const [currentTab, setCurrentTab] = useState<TabKey>("essentials");
-  const [nextId, setNextId] = useState<number>(initialCategories.length + 1);
-  const [open, setOpen] = useState<boolean>(false);
-  const [newCatName, setNewCatName] = useState<string>("");
-  const [newCatValue, setNewCatValue] = useState<string>("");
-  const [valueInputs, setValueInputs] = useState<Record<number, string>>({});
+
+  // UI state
+  const [currentTab, setCurrentTab] = useState<TabKey>('essentials');
+  const [open, setOpen] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatValue, setNewCatValue] = useState('');
+  const [valueInputs, setValueInputs] = useState<Record<string, string>>({});
+
+  // Quick transaction state
+  const [txAmount, setTxAmount] = useState<Record<string, string>>({});
+  const [txNote, setTxNote] = useState<Record<string, string>>({});
+
+  // Debouncers for budget edits
+  const debouncers = useRef<Record<string, any>>({});
+
+  // Month boundaries
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const monthStartStr = monthStart.toISOString().slice(0, 10);
+  const monthEndStr = monthEnd.toISOString().slice(0, 10);
 
   useEffect(() => {
-    const netMonthly = localStorage.getItem("netMonthlySalary");
-    if (netMonthly) {
-      const netMonthlyNum = Number(netMonthly);
-      if (!isNaN(netMonthlyNum) && netMonthlyNum > 0) {
-        setSalary(netMonthlyNum);
-        setManualSalary(netMonthlyNum);
+    let active = true;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) {
+        setLoading(false);
+        router.replace('/login');
         return;
       }
+      const uid = session.user.id;
+      if (!active) return;
+      setUserId(uid);
+
+      // Prefill salary from metrics.net_monthly; fallback to profiles.salary/12
+      const [{ data: met }, { data: prof }] = await Promise.all([
+        supabase.from('metrics').select('net_monthly').eq('id', uid).single(),
+        supabase.from('profiles').select('salary').eq('id', uid).single(),
+      ]);
+
+      const nm = Number(met?.net_monthly ?? 0);
+      if (Number.isFinite(nm) && nm > 0) setSalary(nm);
+      else {
+        const sal = Number(prof?.salary ?? 0);
+        if (Number.isFinite(sal) && sal > 0) setSalary(sal / 12);
+      }
+
+      // Load categories
+      const { data: cats, error: catErr } = await supabase
+        .from('budget_categories')
+        .select('*')
+        .eq('user_id', uid)
+        .order('created_at', { ascending: true });
+
+      if (catErr) console.error('Fetch categories error:', catErr);
+      if (cats) setCategories(cats as Category[]);
+
+      // Load this month's transactions
+      const { data: tx, error: txErr } = await supabase
+        .from('budget_transactions')
+        .select('*')
+        .eq('user_id', uid)
+        .gte('occurred_on', monthStartStr)
+        .lte('occurred_on', monthEndStr)
+        .order('occurred_on', { ascending: false });
+
+      if (txErr) console.error('Fetch transactions error:', txErr);
+      if (tx) {
+        const grouped: Record<string, Tx[]> = {};
+        (tx as Tx[]).forEach((t) => {
+          (grouped[t.category_id] ||= []).push(t);
+        });
+        setTxByCat(grouped);
+      }
+
+      setLoading(false);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [router, monthStartStr, monthEndStr]);
+
+  // Helpers
+  const catByTab = (tab: TabKey) => categories.filter((c) => c.type === tab);
+  const spentForCat = (catId: string) =>
+    (txByCat[catId] || []).reduce((s, t) => s + Number(t.amount || 0), 0);
+
+  const totalsByTab = useMemo(() => {
+    const obj: Record<TabKey, { budget: number; spend: number }> = {
+      essentials: { budget: 0, spend: 0 },
+      priorities: { budget: 0, spend: 0 },
+      lifestyle: { budget: 0, spend: 0 },
+    };
+    for (const c of categories) {
+      obj[c.type].budget += Number(c.monthly_budget || 0);
+      obj[c.type].spend += spentForCat(c.id);
     }
-    const savedProfile = localStorage.getItem("userProfile");
-    if (savedProfile) {
-      try {
-        const profile = JSON.parse(savedProfile);
-        if (profile.salary) {
-          const annualSalary = Number(profile.salary);
-          if (!isNaN(annualSalary) && annualSalary > 0) {
-            const monthlySalary = annualSalary / 12;
-            setSalary(monthlySalary);
-            setManualSalary(monthlySalary);
-          }
-        }
-      } catch {}
-    }
-  }, []);
+    return obj;
+  }, [categories, txByCat]);
 
-  useEffect(() => {
-    setSalary(manualSalary);
-  }, [manualSalary]);
+  const overallBudget = useMemo(
+    () => categories.reduce((s, c) => s + Number(c.monthly_budget || 0), 0),
+    [categories]
+  );
+  const overallSpend = useMemo(
+    () => Object.values(txByCat).flat().reduce((s, t) => s + Number(t.amount || 0), 0),
+    [txByCat]
+  );
+  const remaining = salary - overallBudget;
 
-  const totalAll = categories.reduce((sum, c) => sum + c.value, 0);
-  const remaining = salary - totalAll;
-
-  const tabCats = (tab: TabKey) => categories.filter((c) => c.type === tab);
-  const tabTotal = (tab: TabKey) => tabCats(tab).reduce((s, c) => s + c.value, 0);
-  const tabBudget = (tab: TabKey) => salary * allocationPct(tab);
-
-  const saveNewCategory = () => {
+  // Create category
+  const saveNewCategory = async () => {
+    if (!userId) return;
+    const name = newCatName.trim();
     const value = Number(newCatValue);
-    if (!newCatName.trim() || !Number.isFinite(value) || value < 0) {
-      alert("Please enter a valid name and value (>=0)");
+    if (!name || !Number.isFinite(value) || value < 0) {
+      alert('Please enter a valid name and value (>= 0)');
       return;
     }
+    // optimistic
+    const temp: Category = {
+      id: crypto.randomUUID(),
+      user_id: userId,
+      name,
+      type: currentTab,
+      monthly_budget: value,
+      created_at: new Date().toISOString(),
+      updated_at: null,
+    };
+    setCategories((prev) => [...prev, temp]);
 
-    setCategories((prev) => [
-      ...prev,
-      {
-        id: nextId,
-        name: newCatName.trim(),
-        value,
+    const { data, error } = await supabase
+      .from('budget_categories')
+      .insert({
+        user_id: userId,
+        name,
         type: currentTab,
-      },
-    ]);
-    setNextId((id) => id + 1);
-    setNewCatName("");
-    setNewCatValue("");
+        monthly_budget: value,
+      })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      setCategories((prev) => prev.filter((c) => c.id !== temp.id));
+      console.error('Insert category error:', error);
+      alert('Failed to add category.');
+      return;
+    }
+    setCategories((prev) => prev.map((c) => (c.id === temp.id ? (data as Category) : c)));
+    setNewCatName('');
+    setNewCatValue('');
     setOpen(false);
   };
 
-  const deleteCategory = (catId: number) => {
-    setCategories((prev) => prev.filter((c) => c.id !== catId));
-  };
-
-  const updateValue = (cat: Category) => {
-    const amount = Number(valueInputs[cat.id]);
+  // Update category budget (debounced)
+  const updateBudget = (cat: Category) => {
+    const raw = valueInputs[cat.id];
+    const amount = Number(raw);
     if (!Number.isFinite(amount) || amount < 0) {
-      alert("Enter a valid non-negative amount");
+      alert('Enter a valid non-negative amount');
       return;
     }
-    setCategories((prev) =>
-      prev.map((c) => (c.id === cat.id ? { ...c, value: amount } : c))
-    );
-    setValueInputs((prev) => ({ ...prev, [cat.id]: "" }));
+    // optimistic
+    setCategories((prev) => prev.map((c) => (c.id === cat.id ? { ...c, monthly_budget: amount } : c)));
+    setValueInputs((prev) => ({ ...prev, [cat.id]: '' }));
+
+    if (debouncers.current[cat.id]) clearTimeout(debouncers.current[cat.id]);
+    debouncers.current[cat.id] = setTimeout(async () => {
+      const { error } = await supabase
+        .from('budget_categories')
+        .update({ monthly_budget: amount })
+        .eq('id', cat.id)
+        .eq('user_id', userId!);
+      if (error) {
+        console.error('Update budget error:', error);
+        alert('Failed to update budget.');
+      }
+    }, 350);
   };
+
+  // Delete category
+  const deleteCategory = async (catId: string) => {
+    const prev = categories;
+    setCategories((c) => c.filter((x) => x.id !== catId));
+    const { error } = await supabase.from('budget_categories').delete().eq('id', catId).eq('user_id', userId!);
+    if (error) {
+      console.error('Delete category error:', error);
+      alert('Failed to delete category.');
+      setCategories(prev);
+    } else {
+      setTxByCat((prevTx) => {
+        const copy = { ...prevTx };
+        delete copy[catId];
+        return copy;
+      });
+    }
+  };
+
+  // Add a quick expense transaction to a category
+  const addTx = async (cat: Category) => {
+    if (!userId) return;
+    const amt = Number(txAmount[cat.id]);
+    const note = (txNote[cat.id] || '').trim() || null;
+    if (!Number.isFinite(amt) || amt <= 0) {
+      alert('Enter a valid amount.');
+      return;
+    }
+
+    // optimistic
+    const temp: Tx = {
+      id: crypto.randomUUID(),
+      user_id: userId,
+      category_id: cat.id,
+      amount: amt,
+      occurred_on: new Date().toISOString().slice(0, 10),
+      note,
+      created_at: new Date().toISOString(),
+    };
+    setTxByCat((prev) => ({ ...prev, [cat.id]: [temp, ...(prev[cat.id] || [])] }));
+
+    const { data, error } = await supabase
+      .from('budget_transactions')
+      .insert({
+        category_id: cat.id,
+        amount: amt,
+        note,
+        occurred_on: temp.occurred_on,
+        user_id: userId, // filled by trigger
+      })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      console.error('Insert transaction error:', error);
+      // rollback
+      setTxByCat((prev) => ({
+        ...prev,
+        [cat.id]: (prev[cat.id] || []).filter((t) => t.id !== temp.id),
+      }));
+      alert('Failed to add transaction.');
+      return;
+    }
+
+    // replace temp with server row
+    setTxByCat((prev) => ({
+      ...prev,
+      [cat.id]: [data as Tx, ...(prev[cat.id] || []).filter((t) => t.id !== temp.id)],
+    }));
+    setTxAmount((prev) => ({ ...prev, [cat.id]: '' }));
+    setTxNote((prev) => ({ ...prev, [cat.id]: '' }));
+  };
+
+  if (loading) {
+    return (
+      <>
+        <Navbar />
+        <div className="min-h-screen bg-gray-100 flex items-center justify-center p-6">Loading…</div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -165,57 +335,53 @@ export default function BudgetApp() {
           My Budget
         </motion.h1>
 
+        {/* Salary & 50/30/20 overview */}
         <Card className="w-full max-w-3xl shadow-xl rounded-2xl">
           <CardHeader>
-            <CardTitle className="text-xl">Monthly Salary & 50/30/20</CardTitle>
+            <CardTitle className="text-xl">Monthly Income & 50/30/20</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Input
-              type="number"
-              value={manualSalary}
-              onChange={(e) => setManualSalary(e.target.value === "" ? 0 : Number(e.target.value))}
-              placeholder="Enter your monthly salary"
-            />
-            <div className="grid grid-cols-3 gap-3 text-sm">
-              {(["essentials", "lifestyle", "priorities"] as TabKey[]).map((tab) => (
-                <div key={tab} className="bg-white rounded-xl p-3 shadow">
-                  <div className="font-medium">{TAB_LABELS[tab]}</div>
-                  <div>
-                    Budget: £{tabBudget(tab).toLocaleString(undefined, { minimumFractionDigits: 2 })} (
-                    {(allocationPct(tab) * 100).toFixed(0)}%)
-                  </div>
-                  <div>Current: £{tabTotal(tab).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-                  <div>
-                    Left: £
-                    {Math.max(0, tabBudget(tab) - tabTotal(tab)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </div>
-                  <Progress value={tabBudget(tab) ? Math.min(100, (tabTotal(tab) / tabBudget(tab)) * 100) : 0} />
-                </div>
-              ))}
+            <div className="text-sm text-gray-700">
+              Net Monthly Income: £{salary.toLocaleString(undefined, { minimumFractionDigits: 2 })}
             </div>
+
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              {(['essentials', 'lifestyle', 'priorities'] as TabKey[]).map((tab) => {
+                const alloc = salary * allocationPct(tab);
+                const spend = totalsByTab[tab].spend;
+                // If you prefer comparing "budget" not "spend", switch to totalsByTab[tab].budget
+                return (
+                  <div key={tab} className="bg-white rounded-xl p-3 shadow">
+                    <div className="font-medium">{TAB_LABELS[tab]}</div>
+                    <div>Suggested Budget: £{alloc.toLocaleString(undefined, { minimumFractionDigits: 2 })} ({(allocationPct(tab) * 100).toFixed(0)}%)</div>
+                    <div>Planned Budget: £{totalsByTab[tab].budget.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                    <div>Spent (this month): £{spend.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                    <Progress value={alloc ? Math.min(100, (spend / alloc) * 100) : 0} />
+                  </div>
+                );
+              })}
+            </div>
+
             <div className="text-sm text-gray-600">
-              Overall remaining vs salary: £
-              {Number.isFinite(remaining) ? remaining.toLocaleString(undefined, { minimumFractionDigits: 2 }) : "0.00"}
+              Sum of category budgets: £{overallBudget.toLocaleString(undefined, { minimumFractionDigits: 2 })} | Remaining vs income: £
+              {(salary - overallBudget).toLocaleString(undefined, { minimumFractionDigits: 2 })}
             </div>
           </CardContent>
         </Card>
 
-        <Tabs
-          value={currentTab}
-          onValueChange={(v) => setCurrentTab(v as TabKey)}
-          className="w-full max-w-3xl"
-        >
+        {/* Tabs */}
+        <Tabs value={currentTab} onValueChange={(v) => setCurrentTab(v as TabKey)} className="w-full max-w-3xl">
           <TabsList className="grid grid-cols-3 mb-4 bg-white shadow rounded-2xl">
             <TabsTrigger value="essentials">Essentials (50%)</TabsTrigger>
             <TabsTrigger value="priorities">Priorities (20%)</TabsTrigger>
             <TabsTrigger value="lifestyle">Lifestyle (30%)</TabsTrigger>
           </TabsList>
 
-          {(["essentials", "priorities", "lifestyle"] as TabKey[]).map((tab) => {
-            const cats = tabCats(tab);
-            const total = tabTotal(tab);
-            const budget = tabBudget(tab);
-            const left = budget - total;
+          {(['essentials', 'priorities', 'lifestyle'] as TabKey[]).map((tab) => {
+            const cats = catByTab(tab);
+            const budgetSum = cats.reduce((s, c) => s + Number(c.monthly_budget || 0), 0);
+            const spendSum = cats.reduce((s, c) => s + spentForCat(c.id), 0);
+            const suggested = salary * allocationPct(tab);
 
             return (
               <TabsContent key={tab} value={tab} className="space-y-6">
@@ -224,68 +390,86 @@ export default function BudgetApp() {
                     <CardTitle className="text-xl capitalize">{TAB_LABELS[tab]} Overview</CardTitle>
                   </CardHeader>
                   <CardContent className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      Budget: £{budget.toLocaleString(undefined, { minimumFractionDigits: 2 })} (
-                      {(allocationPct(tab) * 100).toFixed(0)}%)
-                    </div>
-                    <div>Total: £{total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                    <div>Suggested: £{suggested.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                    <div>Planned Budget: £{budgetSum.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                    <div className="col-span-2">Spent (this month): £{spendSum.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
                     <div className="col-span-2">
-                      <Progress value={budget ? Math.min(100, (total / budget) * 100) : 0} />
-                      <div className="mt-1">
-                        Left: £{Math.max(0, left).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                      </div>
+                      <Progress value={suggested ? Math.min(100, (spendSum / suggested) * 100) : 0} />
                     </div>
                   </CardContent>
                 </Card>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {cats.map((cat) => (
-                    <motion.div
-                      key={cat.id}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                    >
-                      <Card className="shadow-lg rounded-2xl">
-                        <CardHeader>
-                          <CardTitle>{cat.name}</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-2">
-                          <div className="flex justify-between text-sm">
-                            <span>Value</span>
-                            <span>£{cat.value.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                          </div>
-                          <div className="flex gap-2 items-center mt-2">
-                            <Input
-                              type="number"
-                              placeholder="New value"
-                              className="flex-1"
-                              value={valueInputs[cat.id] ?? ""}
-                              onChange={(e) =>
-                                setValueInputs((prev) => ({
-                                  ...prev,
-                                  [cat.id]: e.target.value,
-                                }))
-                              }
-                            />
-                            <Button size="sm" onClick={() => updateValue(cat)}>
-                              Update
+                  {cats.map((cat) => {
+                    const spent = spentForCat(cat.id);
+                    const leftVsPlanned = Math.max(0, Number(cat.monthly_budget || 0) - spent);
+
+                    return (
+                      <motion.div key={cat.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+                        <Card className="shadow-lg rounded-2xl">
+                          <CardHeader>
+                            <CardTitle>{cat.name}</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-3 text-sm">
+                            <div className="flex justify-between">
+                              <span>Planned Budget</span>
+                              <span>£{Number(cat.monthly_budget || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Spent (this month)</span>
+                              <span>£{spent.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            </div>
+                            <div className="flex justify-between font-medium">
+                              <span>Left vs Planned</span>
+                              <span>£{leftVsPlanned.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            </div>
+
+                            {/* Edit planned budget */}
+                            <div className="flex gap-2 items-center">
+                              <Input
+                                type="number"
+                                placeholder="New planned budget"
+                                className="flex-1"
+                                value={valueInputs[cat.id] ?? ''}
+                                onChange={(e) => setValueInputs((prev) => ({ ...prev, [cat.id]: e.target.value }))}
+                              />
+                              <Button size="sm" onClick={() => updateBudget(cat)}>
+                                Update
+                              </Button>
+                            </div>
+
+                            {/* Quick expense add */}
+                            <div className="flex gap-2 items-center">
+                              <Input
+                                type="number"
+                                placeholder="Add expense"
+                                className="flex-1"
+                                value={txAmount[cat.id] ?? ''}
+                                onChange={(e) => setTxAmount((prev) => ({ ...prev, [cat.id]: e.target.value }))}
+                              />
+                              <Input
+                                type="text"
+                                placeholder="Note (optional)"
+                                className="flex-1"
+                                value={txNote[cat.id] ?? ''}
+                                onChange={(e) => setTxNote((prev) => ({ ...prev, [cat.id]: e.target.value }))}
+                              />
+                              <Button size="sm" onClick={() => addTx(cat)}>
+                                Add
+                              </Button>
+                            </div>
+
+                            <Button variant="destructive" size="sm" className="w-full" onClick={() => deleteCategory(cat.id)}>
+                              Delete Category
                             </Button>
-                          </div>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            className="w-full mt-2"
-                            onClick={() => deleteCategory(cat.id)}
-                          >
-                            Delete Category
-                          </Button>
-                        </CardContent>
-                      </Card>
-                    </motion.div>
-                  ))}
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    );
+                  })}
                 </div>
 
+                {/* Add Category */}
                 <Card className="shadow-xl rounded-2xl">
                   <CardHeader className="flex flex-row justify-between items-center">
                     <CardTitle className="text-lg">Add {TAB_LABELS[tab]} Category</CardTitle>
@@ -297,14 +481,10 @@ export default function BudgetApp() {
                         <DialogHeader>
                           <DialogTitle>New {TAB_LABELS[tab]} Category</DialogTitle>
                         </DialogHeader>
-                        <Input
-                          placeholder="Category name"
-                          value={newCatName}
-                          onChange={(e) => setNewCatName(e.target.value)}
-                        />
+                        <Input placeholder="Category name" value={newCatName} onChange={(e) => setNewCatName(e.target.value)} />
                         <Input
                           type="number"
-                          placeholder="Value"
+                          placeholder="Planned budget"
                           value={newCatValue}
                           onChange={(e) => setNewCatValue(e.target.value)}
                         />
