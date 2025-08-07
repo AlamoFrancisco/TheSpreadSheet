@@ -1,176 +1,301 @@
-"use client";
+'use client';
 
-import { useState, useEffect } from "react";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { motion } from "framer-motion";
-import Navbar from "@/components/Navbar"; // ✅ Navbar added
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import Navbar from '@/components/Navbar';
+import { motion } from 'framer-motion';
 
-export default function UserProfileForm() {
-  const [profile, setProfile] = useState({
-    firstName: "",
-    lastName: "",
-    gender: "",
-    dob: "",
-    salary: "",
-    photo: null as File | null,
+type Profile = {
+  first_name: string;
+  last_name: string;
+  email: string;
+  gender: string;
+  dob: string;
+  salary: string;
+  photo: File | null;
+  photo_url?: string;
+};
+
+export default function ProfilePage() {
+  const router = useRouter();
+  const [profile, setProfile] = useState<Profile>({
+    first_name: '',
+    last_name: '',
+    email: '',
+    gender: '',
+    dob: '',
+    salary: '',
+    photo: null,
+    photo_url: '',
   });
 
+  const [editable, setEditable] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
-    const saved = localStorage.getItem("userProfile");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      setProfile({
-        ...parsed,
-        photo: null, // reset photo input
-      });
-    }
-  }, []);
+    const loadProfile = async () => {
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession();
+
+      if (error || !session?.user) {
+        // Wait a bit and try again once if no session yet
+        setTimeout(loadProfile, 300);
+        return;
+      }
+
+      const user = session.user;
+      setUserId(user.id);
+
+      const { data, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (profileError && profileError.code !== 'PGRST116') {
+        console.error('Fetch profile error:', profileError);
+        return;
+      }
+
+      if (data) {
+        setProfile({
+          first_name: data.first_name || '',
+          last_name: data.last_name || '',
+          email: data.email || '',
+          gender: data.gender || '',
+          dob: data.dob || '',
+          salary: data.salary?.toString() || '',
+          photo: null,
+          photo_url: data.photo_url || '',
+        });
+        setEditable(false);
+      } else {
+        setEditable(true); // new user
+      }
+
+      setLoading(false);
+    };
+
+    loadProfile();
+  }, [router]);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
   ) => {
-    const target = e.target;
-    const { name } = target;
-
-    if (target instanceof HTMLInputElement && target.type === "file") {
-      setProfile((prev) => ({
-        ...prev,
-        [name]: target.files && target.files[0] ? target.files[0] : null,
-      }));
+    const { name, value, files } = e.target as HTMLInputElement;
+    if (e.target.type === 'file' && files) {
+      setProfile((prev) => ({ ...prev, photo: files[0] }));
     } else {
-      setProfile((prev) => ({
-        ...prev,
-        [name]: target.value,
-      }));
+      setProfile((prev) => ({ ...prev, [name]: value }));
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const { photo, ...profileWithoutPhoto } = profile;
+  const uploadPhoto = async (): Promise<string | undefined> => {
+    if (!profile.photo || !userId) return profile.photo_url;
 
-    // Convert salary to number before saving
-    const formatted = {
-      ...profileWithoutPhoto,
-      salary: Number(profileWithoutPhoto.salary),
-    };
+    const fileExt = profile.photo.name.split('.').pop();
+    const fileName = `${userId}.${fileExt}`;
+    const { error: uploadError } = await supabase.storage
+      .from('avatars')
+      .upload(fileName, profile.photo, { upsert: true });
 
-    localStorage.setItem("userProfile", JSON.stringify(formatted));
-    alert("Profile saved locally!");
+    if (uploadError) {
+      console.error('Upload error:', uploadError);
+      return undefined;
+    }
+
+    const { data: publicUrl } = supabase.storage
+      .from('avatars')
+      .getPublicUrl(fileName);
+
+    return publicUrl?.publicUrl;
   };
 
-  const getMaxDate = () => {
-    const today = new Date();
-    today.setFullYear(today.getFullYear() - 18);
-    return today.toISOString().split("T")[0];
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId) return;
+
+    const photoUrl = await uploadPhoto();
+
+    const { error } = await supabase
+      .from('profiles')
+      .upsert({
+        id: userId,
+        first_name: profile.first_name,
+        last_name: profile.last_name,
+        email: profile.email,
+        gender: profile.gender,
+        dob: profile.dob,
+        salary: Number(profile.salary),
+        photo_url: photoUrl || null,
+        last_login: new Date().toISOString(),
+      });
+
+    if (error) {
+      console.error('Save error:', error);
+      alert('Failed to save profile');
+    } else {
+      alert('Profile saved!');
+      router.push('/page');
+    }
   };
 
   return (
     <>
-      <Navbar /> {/* ✅ Top navigation bar */}
+      {!editable && <Navbar />}
       <div className="min-h-screen p-6 flex flex-col items-center">
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="w-full max-w-xl"
-        >
-          <Card className="shadow-lg rounded-2xl">
-            <CardHeader>
-              <CardTitle className="text-xl">User Profile</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="flex flex-col items-center">
-                  {profile.photo ? (
-                    <img
-                      src={URL.createObjectURL(profile.photo)}
-                      alt="Profile Preview"
-                      className="rounded-full w-32 h-32 object-cover border-2 border-gray-300 mb-2"
-                    />
-                  ) : (
-                    <div className="rounded-full w-32 h-32 bg-gray-200 border-2 border-dashed border-gray-400 flex items-center justify-center mb-2 text-sm text-gray-500">
-                      Drag an image here
-                    </div>
+        {loading ? (
+          <p>Loading profile...</p>
+        ) : (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+            className="w-full max-w-xl"
+          >
+            <Card className="shadow-lg rounded-2xl">
+              <CardHeader>
+                <CardTitle className="text-xl flex justify-between">
+                  User Profile
+                  {!editable && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setEditable(true)}
+                    >
+                      Edit
+                    </Button>
                   )}
-                  <Input
-                    type="file"
-                    name="photo"
-                    onChange={handleChange}
-                    accept="image/*"
-                    className="w-full"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="firstName">First Name</Label>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div className="flex flex-col items-center">
+                    {profile.photo ? (
+                      <img
+                        src={URL.createObjectURL(profile.photo)}
+                        alt="Preview"
+                        className="rounded-full w-32 h-32 object-cover border mb-2"
+                      />
+                    ) : profile.photo_url ? (
+                      <img
+                        src={profile.photo_url}
+                        alt="Profile"
+                        className="rounded-full w-32 h-32 object-cover border mb-2"
+                      />
+                    ) : (
+                      <div className="rounded-full w-32 h-32 bg-gray-200 border-2 border-dashed border-gray-400 flex items-center justify-center mb-2 text-sm text-gray-500">
+                        No image
+                      </div>
+                    )}
                     <Input
-                      name="firstName"
-                      value={profile.firstName}
+                      type="file"
+                      name="photo"
+                      accept="image/*"
                       onChange={handleChange}
+                      className="w-full"
+                      disabled={!editable}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="first_name">First Name</Label>
+                      <Input
+                        name="first_name"
+                        value={profile.first_name}
+                        onChange={handleChange}
+                        disabled={!editable}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="last_name">Last Name</Label>
+                      <Input
+                        name="last_name"
+                        value={profile.last_name}
+                        onChange={handleChange}
+                        disabled={!editable}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="email">Email</Label>
+                    <Input
+                      name="email"
+                      type="email"
+                      value={profile.email}
+                      onChange={handleChange}
+                      disabled={!editable}
                       required
                     />
                   </div>
+
                   <div>
-                    <Label htmlFor="lastName">Last Name</Label>
-                    <Input
-                      name="lastName"
-                      value={profile.lastName}
+                    <Label htmlFor="gender">Gender</Label>
+                    <select
+                      name="gender"
+                      value={profile.gender}
                       onChange={handleChange}
+                      className="w-full border border-gray-300 rounded px-3 py-2"
+                      disabled={!editable}
+                    >
+                      <option value="">Select Gender</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="dob">Date of Birth</Label>
+                    <Input
+                      type="date"
+                      name="dob"
+                      value={profile.dob}
+                      onChange={handleChange}
+                      disabled={!editable}
+                      max={new Date(
+                        new Date().setFullYear(new Date().getFullYear() - 18)
+                      )
+                        .toISOString()
+                        .split('T')[0]}
                       required
                     />
                   </div>
-                </div>
 
-                <div>
-                  <Label htmlFor="gender">Gender</Label>
-                  <select
-                    name="gender"
-                    value={profile.gender}
-                    onChange={handleChange}
-                    className="w-full border border-gray-300 rounded px-3 py-2"
-                  >
-                    <option value="">Select Gender</option>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                    <option value="Other">Other</option>
-                  </select>
-                </div>
+                  <div>
+                    <Label htmlFor="salary">Current Salary (£/year)</Label>
+                    <Input
+                      type="number"
+                      name="salary"
+                      value={profile.salary}
+                      onChange={handleChange}
+                      disabled={!editable}
+                      required
+                    />
+                  </div>
 
-                <div>
-                  <Label htmlFor="dob">Date of Birth</Label>
-                  <Input
-                    type="date"
-                    name="dob"
-                    value={profile.dob}
-                    onChange={handleChange}
-                    max={getMaxDate()}
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="salary">Current Salary (£/year)</Label>
-                  <Input
-                    type="number"
-                    name="salary"
-                    value={profile.salary}
-                    onChange={handleChange}
-                    required
-                  />
-                </div>
-
-                <Button type="submit" className="w-full">
-                  Save Profile
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        </motion.div>
+                  {editable && (
+                    <Button type="submit" className="w-full">
+                      Save Profile
+                    </Button>
+                  )}
+                </form>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
       </div>
     </>
   );
