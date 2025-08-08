@@ -21,6 +21,7 @@ const apps = [
   { href: '/retirement', label: 'Retirement', icon: LineChart },
   { href: '/salary', label: 'Net Salary', icon: BadgePoundSterling },
   { href: '/goals', label: 'Goals & Debt', icon: Goal },
+  { href: '/roadmap', label: 'Financial Roadmap', icon: PiggyBank } ,
 ];
 
 export default function Navbar() {
